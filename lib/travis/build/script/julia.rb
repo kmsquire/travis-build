@@ -13,12 +13,16 @@ module Travis
       class Julia < Script
         DEFAULTS = {
           julia: 'release',
+          wordsize: 64
         }
+        X86_DEPS = 'libc6:i386 zlib1g:i386 libgssapi-krb5-2:i386'
 
         def export
           super
 
           sh.export 'TRAVIS_JULIA_VERSION', config[:julia].to_s.shellescape,
+            echo: false
+          sh.export 'TRAVIS_JULIA_WORDSIZE', config[:wordsize].to_s.shellescape,
             echo: false
         end
 
@@ -39,6 +43,9 @@ module Travis
             sh.cmd 'CURL_USER_AGENT="Travis-CI $(curl --version | head -n 1)"'
             case config[:os]
             when 'linux'
+              if config[:wordsize] == 32
+                install_dependencies(X86_DEPS)
+              end
               sh.cmd 'mkdir -p ~/julia'
               sh.cmd %Q{curl -A "$CURL_USER_AGENT" -s -L --retry 7 '#{julia_url}' } \
                        '| tar -C ~/julia -x -z --strip-components=1 -f -'
@@ -90,9 +97,18 @@ module Travis
           def julia_url
             case config[:os]
             when 'linux'
-              osarch = 'linux/x64'
-              ext = 'linux-x86_64.tar.gz'
-              nightlyext = 'linux64.tar.gz'
+              case config[:wordsize].to_s
+              when '64'
+                osarch = 'linux/x64'
+                ext = 'linux-x86_64.tar.gz'
+                nightlyext = 'linux64.tar.gz'
+              when '32'
+                osarch = 'linux/x86'
+                ext = 'linux-i686.tar.gz'
+                nightlyext = 'linux32.tar.gz'
+              else
+                sh.failure "Illegal wordsize: #{config[:wordsize]}"
+              end
             when 'osx'
               osarch = 'osx/x64'
               ext = 'osx10.7+.dmg'
@@ -121,6 +137,20 @@ module Travis
             shurl = "git remote -v | head -n 1 | cut -f 2 | cut -f 1 -d ' '"
             sh.export 'JL_PKG', "$(#{shurl} | julia -e '#{jlcode}')",
               echo: false
+          end
+
+          def install_dependencies(deps)
+            return if config[:os] != 'linux'
+            sh.fold 'install_packages' do
+              sh.echo 'Installing dependencies', ansi: :yellow
+
+              sh.if '$(lsb_release -cs) != precise' do
+                sh.cmd 'sudo dpkg --add-architecture i386'
+              end
+
+              sh.cmd 'sudo apt-get update -qq', retry: true
+              sh.cmd 'sudo apt-get install -y --no-install-recommends ' + deps, retry: true
+            end
           end
       end
     end
